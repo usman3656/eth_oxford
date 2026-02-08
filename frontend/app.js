@@ -93,6 +93,7 @@ async function initWebcam() {
     });
     webcam.srcObject = stream;
     state.stream = stream;
+    syncOpponentStreams();
     stopStreamBtn.textContent = "Close Stream";
     streamStatus.textContent = "Stream: live";
     streamStatus.classList.remove("muted", "bad", "warn");
@@ -121,6 +122,7 @@ function stopWebcam() {
     state.stream = null;
   }
   webcam.srcObject = null;
+  syncOpponentStreams();
   stopStreamBtn.textContent = "Open Stream";
   const snapCtx = snapshot.getContext("2d");
   snapCtx.clearRect(0, 0, snapshot.width, snapshot.height);
@@ -391,6 +393,18 @@ function renderPlayers(players) {
     .join("");
 }
 
+function syncOpponentStreams() {
+  const tiles = document.querySelectorAll(".opponent-stream");
+  tiles.forEach((tile) => {
+    if (state.stream) {
+      tile.srcObject = state.stream;
+      tile.play?.();
+    } else {
+      tile.srcObject = null;
+    }
+  });
+}
+
 async function refreshStatus() {
   if (!state.gameId) {
     return;
@@ -430,6 +444,7 @@ function updateGameUI() {
     : "No winner yet.";
   renderCommunityCards(game.community || []);
   updateSeats(game.players || [], game.currentTurnIndex, game.winner);
+  updateOpponentTiles(game.players || []);
   const isMyTurn =
     game.players?.[game.currentTurnIndex]?.hash === state.playerHash;
   setActionsEnabled(Boolean(isMyTurn));
@@ -533,6 +548,28 @@ function updateSeats(players, turnIndex, winnerHash) {
     cardEls.forEach((cardEl, cardIdx) => {
       cardEl.textContent = cards ? formatCard(cards[cardIdx]) : "??";
     });
+  });
+}
+
+function updateOpponentTiles(players) {
+  const tiles = document.querySelectorAll(".stream-tile");
+  const opponents = (players || []).filter(
+    (player) => player && player.hash !== state.playerHash
+  );
+  tiles.forEach((tile, idx) => {
+    const opponent = opponents[idx];
+    if (opponent) {
+      tile.classList.remove("is-hidden");
+      const label = opponent.isBot
+        ? opponent.hash
+        : `Player ${opponent.hash.slice(0, 6)}`;
+      const labelEl = tile.querySelector(".stream-label");
+      if (labelEl) {
+        labelEl.textContent = label;
+      }
+    } else {
+      tile.classList.add("is-hidden");
+    }
   });
 }
 

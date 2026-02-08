@@ -392,6 +392,7 @@ function getOrCreateGame(gameId) {
       currentBet: 0,
       pendingActors: [],
       roundBets: new Map(),
+      roundActions: new Set(),
       deck: [],
       community: [],
       revealedCount: 0,
@@ -445,6 +446,7 @@ function initializeGame(game) {
   game.actionCount = 0;
   game.currentBet = game.bigBlind;
   game.roundBets = new Map();
+  game.roundActions = new Set();
   const sbIndex = nextActiveIndex(game.players, game.dealerIndex);
   const bbIndex = nextActiveIndex(game.players, sbIndex);
   const sbPlayer = game.players[sbIndex];
@@ -452,11 +454,13 @@ function initializeGame(game) {
   if (sbPlayer) {
     game.pot += game.smallBlind;
     game.roundBets.set(sbPlayer.hash, game.smallBlind);
+    sbPlayer.stack = Math.max(0, (sbPlayer.stack ?? 100) - game.smallBlind);
     sbPlayer.lastAction = `blind ${game.smallBlind}`;
   }
   if (bbPlayer) {
     game.pot += game.bigBlind;
     game.roundBets.set(bbPlayer.hash, game.bigBlind);
+    bbPlayer.stack = Math.max(0, (bbPlayer.stack ?? 100) - game.bigBlind);
     bbPlayer.lastAction = `blind ${game.bigBlind}`;
   }
   const startIndex = nextActiveIndex(game.players, bbIndex);
@@ -562,7 +566,8 @@ function handleAction(game, playerHash, action, amount = 0) {
     player.lastAction = "check";
     removePending(game, playerHash);
   } else if (action === "call") {
-    if (safeAmount !== required) {
+    const callAmount = safeAmount === 0 ? required : safeAmount;
+    if (callAmount < required) {
       return "call amount must match bet";
     }
     if (required === 0) {
@@ -570,6 +575,7 @@ function handleAction(game, playerHash, action, amount = 0) {
     } else {
       game.pot += required;
       game.roundBets.set(playerHash, prev + required);
+      player.stack = Math.max(0, (player.stack ?? 100) - required);
       player.lastAction = `call ${required}`;
     }
     removePending(game, playerHash);
@@ -578,19 +584,25 @@ function handleAction(game, playerHash, action, amount = 0) {
       return "raise too small";
     }
     const delta = safeAmount - prev;
+    if (delta <= required) {
+      return "raise too small";
+    }
     game.pot += delta;
     game.currentBet = safeAmount;
     game.roundBets.set(playerHash, safeAmount);
+    player.stack = Math.max(0, (player.stack ?? 100) - delta);
     player.lastAction = `raise ${safeAmount}`;
     const activeHashes = game.players
       .filter((p) => !p.folded)
       .map((p) => p.hash)
       .filter((hash) => hash !== playerHash);
     game.pendingActors = activeHashes;
+    game.roundActions = new Set([playerHash]);
   } else {
     return "invalid action";
   }
 
+  game.roundActions.add(playerHash);
   game.lastAction = {
     player: playerHash,
     action,
@@ -605,7 +617,7 @@ function handleAction(game, playerHash, action, amount = 0) {
     game.winner = activePlayers[0]?.hash || null;
   } else {
     game.currentTurnIndex = nextActiveIndex(game.players, game.currentTurnIndex);
-    if (game.pendingActors.length === 0) {
+    if (isBettingRoundComplete(game)) {
       advancePhase(game);
       if (game.phase === "showdown") {
         game.revealedCount = 5;
@@ -669,7 +681,23 @@ function setPendingActors(game, startIndex) {
 function startRound(game, startIndex) {
   game.currentBet = 0;
   game.roundBets = new Map();
+  game.roundActions = new Set();
   setPendingActors(game, startIndex);
+}
+
+function isBettingRoundComplete(game) {
+  const active = game.players.filter((p) => !p.folded);
+  if (!active.length) {
+    return true;
+  }
+  const allActed = active.every((p) => game.roundActions.has(p.hash));
+  if (game.currentBet === 0) {
+    return allActed;
+  }
+  const allMatched = active.every(
+    (p) => (game.roundBets.get(p.hash) || 0) >= game.currentBet
+  );
+  return allActed && allMatched;
 }
 
 function removePending(game, playerHash) {

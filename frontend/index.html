@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ZK-LivePoker MVP</title>
+    <title>RealFace Poker</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="table-layout">
       <header class="topbar">
         <div>
-          <h1>ZK-LivePoker</h1>
+          <h1>RealFace Poker</h1>
           <p>Verifiable hands, human presence, honest bets.</p>
         </div>
         <div class="status-pills">
@@ -40,17 +40,17 @@
             <button id="verifyFaceBtn">Verify Human</button>
           </div>
           <div class="streams-grid">
-            <div class="stream-tile">
+            <div class="stream-tile is-hidden">
               <div class="stream-label">Opponent A</div>
-              <div class="stream-placeholder">No stream</div>
+              <video class="stream-thumb opponent-stream" autoplay playsinline muted></video>
             </div>
-            <div class="stream-tile">
+            <div class="stream-tile is-hidden">
               <div class="stream-label">Opponent B</div>
-              <div class="stream-placeholder">No stream</div>
+              <video class="stream-thumb opponent-stream" autoplay playsinline muted></video>
             </div>
-            <div class="stream-tile">
+            <div class="stream-tile is-hidden">
               <div class="stream-label">Opponent C</div>
-              <div class="stream-placeholder">No stream</div>
+              <video class="stream-thumb opponent-stream" autoplay playsinline muted></video>
             </div>
           </div>
         </div>

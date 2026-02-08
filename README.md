@@ -1,6 +1,6 @@
-# ZK-LivePoker MVP
+# RealFace Poker
 
-ZK-LivePoker is a multiplayer Texas Hold'em demo that combines verifiable
+RealFace Poker is a multiplayer Texas Hold'em demo that combines verifiable
 dealing, human liveness checks, and a minimal on-chain betting contract.
 It is designed as a hackathon-ready prototype with a clear, judge-friendly
 flow that highlights cryptography concepts while keeping gameplay fast.
@@ -41,6 +41,14 @@ Blockchain
 The ZK and blockchain steps are currently mocked or minimal but included to
 show how the final system would be wired.
 
+## Features
+
+- Multiplayer Texas Hold'em with turn-based betting rounds
+- Verifiable dealing (deck commitment + encrypted hands)
+- Face-based liveness and identity lock for demo integrity
+- Bot players for quick testing
+- Opponent stream tiles (same demo stream mirrored for UI)
+
 ## Run the demo
 
 1. Start backend (serves frontend too)
@@ -54,6 +62,14 @@ npm start
 ```
 http://localhost:3000
 ```
+
+## Quick demo script (1–2 minutes)
+
+1. Open two tabs and enter the same game ID in both.
+2. Start stream, click "Verify Human" in each tab.
+3. Click "Deal" to receive hole cards (visible only to that tab).
+4. Use Call/Raise to advance phases (flop/turn/river).
+5. Show winner at showdown.
 
 ## Optional: smart contract demo
 
@@ -94,6 +110,13 @@ npm run deploy
 - Hand encryption is base64-encoded payload
 
 These are placeholders to show UX and protocol flow.
+
+## Troubleshooting
+
+- If webcam fails: check browser permissions and reload.
+- If stream shows offline: click "Open Stream".
+- If cards do not appear: click "Deal" after joining the game.
+- If actions fail: ensure it is your turn (top status bar).
 
 ## Known limitations
 

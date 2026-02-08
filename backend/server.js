@@ -270,6 +270,29 @@ function initializeGame(game) {
   game.pendingActors = game.players.map((player) => player.hash);
 }
 
+function ensureEncryptedHand(game, playerHash) {
+  if (game.encryptedHands.has(playerHash)) {
+    return true;
+  }
+  const playerIndex = game.players.findIndex(
+    (player) => player.hash === playerHash
+  );
+  if (playerIndex === -1) {
+    return false;
+  }
+  const key = state.playerKeys.get(playerHash);
+  if (!key || !game.deck.length) {
+    return false;
+  }
+  const card1 = game.deck[playerIndex * 2];
+  const card2 = game.deck[playerIndex * 2 + 1];
+  game.encryptedHands.set(playerHash, [
+    encryptCardMock(card1, key),
+    encryptCardMock(card2, key)
+  ]);
+  return true;
+}
+
 function advancePhase(game) {
   if (game.revealedCount === 0) {
     game.revealedCount = 3;
@@ -384,9 +407,17 @@ app.post("/api/game/action", (req, res) => {
     res.status(400).json({ error: "player not in game" });
     return;
   }
-  if (game.players[game.currentTurnIndex]?.hash !== playerHash) {
+  const pendingSet = new Set(game.pendingActors);
+  const isPending = pendingSet.has(playerHash);
+  const isTurn =
+    game.players[game.currentTurnIndex]?.hash === playerHash ||
+    !game.players[game.currentTurnIndex];
+  if (!isTurn && !isPending) {
     res.status(400).json({ error: "not your turn" });
     return;
+  }
+  if (!isTurn && isPending) {
+    game.currentTurnIndex = playerIndex;
   }
 
   const parsedAmount = Number(amount);
@@ -481,11 +512,19 @@ app.get("/api/game/hand", (req, res) => {
     res.status(400).json({ error: "missing playerHash" });
     return;
   }
-  const encrypted = game.encryptedHands.get(playerHash);
-  if (!encrypted) {
+  if (!game.deckCommitment) {
+    if (game.players.length < 2) {
+      res.status(409).json({ error: "waiting for players" });
+      return;
+    }
+    initializeGame(game);
+  }
+  const hasHand = ensureEncryptedHand(game, playerHash);
+  if (!hasHand) {
     res.status(404).json({ error: "hand not ready" });
     return;
   }
+  const encrypted = game.encryptedHands.get(playerHash);
   const proof = createProofMock({
     encryptedHand: { playerHash, cards: encrypted },
     deckCommitment: game.deckCommitment

@@ -60,7 +60,8 @@ async function api(path, body) {
     body: JSON.stringify(body)
   });
   if (!res.ok) {
-    throw new Error(`Request failed: ${res.status}`);
+    const text = await res.text();
+    throw new Error(`Request failed: ${res.status} ${text}`);
   }
   return res.json();
 }
@@ -229,21 +230,19 @@ function updateGameUI() {
 
 function setActionsEnabled(enabled) {
   [foldBtn, checkBtn, callBtn, raiseBtn].forEach((btn) => {
-    btn.disabled = !enabled;
-    btn.style.opacity = enabled ? "1" : "0.5";
-    btn.style.cursor = enabled ? "pointer" : "not-allowed";
+    btn.disabled = false;
+    btn.style.opacity = enabled ? "1" : "0.85";
+    btn.style.cursor = "pointer";
   });
 }
 
 function updateActionButtons(currentBet, isMyTurn) {
-  if (!isMyTurn) {
-    return;
-  }
   const canCheck = currentBet === 0;
-  checkBtn.disabled = !canCheck;
-  callBtn.disabled = canCheck;
-  checkBtn.style.opacity = canCheck ? "1" : "0.5";
-  callBtn.style.opacity = canCheck ? "0.5" : "1";
+  checkBtn.style.opacity = canCheck ? "1" : "0.7";
+  callBtn.style.opacity = canCheck ? "0.7" : "1";
+  [foldBtn, checkBtn, callBtn, raiseBtn].forEach((btn) => {
+    btn.style.cursor = "pointer";
+  });
 }
 
 function updateSeats(players, turnIndex, winnerHash) {
@@ -305,44 +304,48 @@ function updateSeats(players, turnIndex, winnerHash) {
 }
 
 async function verifyHuman() {
-  if (!state.stream) {
-    logProof("Face proof", { error: "Webcam stream unavailable." });
-    setBadge(humanBadge, "Human: no camera", "bad");
-    return;
-  }
-  const frames = [];
-  for (let i = 0; i < 3; i += 1) {
-    const frame = captureFrame();
-    if (!frame) {
-      setBadge(humanBadge, "Human: camera blocked", "bad");
+  try {
+    if (!state.stream) {
+      logProof("Face proof", { error: "Webcam stream unavailable." });
+      setBadge(humanBadge, "Human: no camera", "bad");
       return;
     }
-    frames.push(frame);
-    await sleep(120);
+    const frames = [];
+    for (let i = 0; i < 3; i += 1) {
+      const frame = captureFrame();
+      if (!frame) {
+        setBadge(humanBadge, "Human: camera blocked", "bad");
+        return;
+      }
+      frames.push(frame);
+      await sleep(120);
+    }
+    const embedding = await poseidonHashMock(frames.join("|"));
+    const result = await api("/api/face-verify", { embedding });
+    state.playerHash = result.hash;
+    sessionStore.setItem("zkpoker.playerHash", result.hash);
+    playerHashLabel.textContent = `Player hash: ${result.hash.slice(0, 16)}...`;
+    setBadge(
+      humanBadge,
+      result.unique ? "Human: verified" : "Human: reused",
+      result.unique ? "" : "warn"
+    );
+    logProof("Face proof", result);
+    await api("/api/join-table", { playerHash: result.hash });
+    await api("/api/register-key", {
+      playerHash: result.hash,
+      playerKey: state.playerKey
+    });
+    startLiveness();
+  } catch (error) {
+    logProof("Face proof error", { error: error.message });
+    setBadge(humanBadge, "Human: verify failed", "bad");
   }
-  const embedding = await poseidonHashMock(frames.join("|"));
-  const result = await api("/api/face-verify", { embedding });
-  state.playerHash = result.hash;
-  sessionStore.setItem("zkpoker.playerHash", result.hash);
-  playerHashLabel.textContent = `Player hash: ${result.hash.slice(0, 16)}...`;
-  setBadge(
-    humanBadge,
-    result.unique ? "Human: verified" : "Human: reused",
-    result.unique ? "" : "warn"
-  );
-  logProof("Face proof", result);
-  await api("/api/join-table", { playerHash: result.hash });
-  await api("/api/register-key", {
-    playerHash: result.hash,
-    playerKey: state.playerKey
-  });
-  startLiveness();
 }
 
 async function dealHands() {
   if (!state.gameId) {
-    logProof("Deal error", { error: "Join a game first." });
-    return;
+    await joinGame();
   }
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const res = await fetch(
@@ -365,8 +368,11 @@ async function dealHands() {
 
 async function verifyHand() {
   if (!state.encryptedHand) {
-    logProof("Verify hand", { error: "No hand dealt yet." });
-    return;
+    await dealHands();
+    if (!state.encryptedHand) {
+      logProof("Verify hand", { error: "No hand dealt yet." });
+      return;
+    }
   }
   const result = await api("/api/verify-hand", {
     deckCommitment: state.deckCommitment,
@@ -376,22 +382,33 @@ async function verifyHand() {
   logProof("Hand verification", result);
 }
 
-async function placeBet(amount) {
+async function sendAction(action, amount = 0) {
   if (!state.gameId) {
-    logProof("Bet error", { error: "Join a game first." });
-    return;
+    logProof("Action error", { error: "Join a game first." });
+    return null;
   }
-  const result = await api("/api/game/action", {
-    gameId: state.gameId,
-    playerHash: state.playerHash,
-    action: amount === 0 ? "fold" : "call",
-    amount
-  });
-  logProof("Bet placed", result);
-  if (result.game) {
-    state.game = result.game;
-    updateGameUI();
+  try {
+    const result = await api("/api/game/action", {
+      gameId: state.gameId,
+      playerHash: state.playerHash,
+      action,
+      amount
+    });
+    logProof(`Action: ${action}`, result);
+    if (result.game) {
+      state.game = result.game;
+      updateGameUI();
+    }
+    return result;
+  } catch (error) {
+    logProof(`Action error: ${action}`, { error: error.message });
+    return null;
   }
+}
+
+async function placeBet(amount) {
+  const action = amount === 0 ? "fold" : "call";
+  await sendAction(action, amount);
 }
 
 async function settleHand() {
@@ -420,69 +437,40 @@ joinTableBtn.addEventListener("click", async () => {
     });
     startLiveness();
   }
+  if (!gameIdInput.value) {
+    gameIdInput.value = "demo";
+  }
+  await joinGame();
 });
 
 verifyFaceBtn.addEventListener("click", verifyHuman);
 dealBtn.addEventListener("click", dealHands);
 verifyHandBtn.addEventListener("click", verifyHand);
-revealBtn.addEventListener("click", () => {
+revealBtn.addEventListener("click", async () => {
+  if (!state.encryptedHand) {
+    await dealHands();
+  }
   if (state.encryptedHand) {
     revealCards(state.encryptedHand);
+  } else {
+    logProof("Reveal error", { error: "Hand not available yet." });
   }
 });
 
 foldBtn.addEventListener("click", () => placeBet(0));
 checkBtn.addEventListener("click", async () => {
-  if (!state.gameId) {
-    logProof("Bet error", { error: "Join a game first." });
-    return;
-  }
-  const result = await api("/api/game/action", {
-    gameId: state.gameId,
-    playerHash: state.playerHash,
-    action: "check",
-    amount: 0
-  });
-  logProof("Check", result);
-  if (result.game) {
-    state.game = result.game;
-    updateGameUI();
-  }
+  await sendAction("check", 0);
 });
 callBtn.addEventListener("click", async () => {
   const currentBet = state.game?.currentBet || 0;
   if (currentBet === 0) {
-    const result = await api("/api/game/action", {
-      gameId: state.gameId,
-      playerHash: state.playerHash,
-      action: "check",
-      amount: 0
-    });
-    logProof("Check", result);
-    if (result.game) {
-      state.game = result.game;
-      updateGameUI();
-    }
+    await sendAction("check", 0);
     return;
   }
-  placeBet(currentBet);
+  await sendAction("call", currentBet);
 });
 raiseBtn.addEventListener("click", async () => {
-  if (!state.gameId) {
-    logProof("Bet error", { error: "Join a game first." });
-    return;
-  }
-  const result = await api("/api/game/action", {
-    gameId: state.gameId,
-    playerHash: state.playerHash,
-    action: "raise",
-    amount: (state.game?.currentBet || 0) + 20
-  });
-  logProof("Raise", result);
-  if (result.game) {
-    state.game = result.game;
-    updateGameUI();
-  }
+  await sendAction("raise", (state.game?.currentBet || 0) + 20);
 });
 
 initWebcam();

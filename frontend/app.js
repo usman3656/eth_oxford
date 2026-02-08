@@ -47,7 +47,8 @@ const state = {
   faceHistory: [],
   lockedFaceHash: sessionStore.getItem("zkpoker.lockedFaceHash"),
   faceMismatchCount: 0,
-  lastBotActionSig: null
+  lastBotActionSig: null,
+  lastPotValue: null
 };
 
 sessionStore.setItem("zkpoker.playerKey", state.playerKey);
@@ -483,6 +484,12 @@ function updateGameUI() {
   }
   renderPlayers(game.players || []);
   potDisplay.textContent = `$${game.pot ?? 0}`;
+  if (state.lastPotValue !== game.pot) {
+    potDisplay.classList.remove("pulse");
+    void potDisplay.offsetWidth;
+    potDisplay.classList.add("pulse");
+    state.lastPotValue = game.pot;
+  }
   const statusParts = [
     `Game: ${game.id}`,
     `Phase: ${game.phase}`,

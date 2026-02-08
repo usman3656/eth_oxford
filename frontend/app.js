@@ -10,9 +10,9 @@ const playersList = document.getElementById("playersList");
 const gameIdInput = document.getElementById("gameIdInput");
 const joinGameBtn = document.getElementById("joinGameBtn");
 const gameStatus = document.getElementById("gameStatus");
+const simulateBtn = document.getElementById("simulateBtn");
 const stopStreamBtn = document.getElementById("stopStreamBtn");
 
-const joinTableBtn = document.getElementById("joinTableBtn");
 const verifyFaceBtn = document.getElementById("verifyFaceBtn");
 const dealBtn = document.getElementById("dealBtn");
 const verifyHandBtn = document.getElementById("verifyHandBtn");
@@ -36,7 +36,11 @@ const state = {
   encryptedHand: null,
   handProof: null,
   livenessTimer: null,
-  stream: null
+  stream: null,
+  faceModelReady: false,
+  faceModelError: null,
+  faceDetectBusy: false,
+  faceDetectIntervalMs: 1500
 };
 
 sessionStore.setItem("zkpoker.playerKey", state.playerKey);
@@ -109,6 +113,45 @@ function captureFrame() {
     return Array.from(imageData.data).slice(0, 400).join(",");
   } catch (error) {
     return null;
+  }
+}
+
+async function initFaceModel() {
+  if (state.faceModelReady || state.faceModelError) {
+    return;
+  }
+  try {
+    const MODEL_URL =
+      "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    state.faceModelReady = true;
+  } catch (error) {
+    state.faceModelError = error.message;
+    logProof("Face model error", { error: error.message });
+  }
+}
+
+async function detectFaceInVideo() {
+  if (!state.stream) {
+    return false;
+  }
+  if (state.faceDetectBusy) {
+    return false;
+  }
+  await initFaceModel();
+  if (!state.faceModelReady) {
+    return false;
+  }
+  state.faceDetectBusy = true;
+  try {
+    const options = new faceapi.TinyFaceDetectorOptions({
+      inputSize: 160,
+      scoreThreshold: 0.6
+    });
+    const detection = await faceapi.detectSingleFace(webcam, options);
+    return Boolean(detection);
+  } finally {
+    state.faceDetectBusy = false;
   }
 }
 
@@ -205,7 +248,6 @@ function updateGameUI() {
     `Phase: ${game.phase}`,
     `Bet: ${game.currentBet ?? 0}`,
     game.pendingActors ? `To act: ${game.pendingActors.length}` : null,
-    game.winner ? `Winner: ${game.winner.slice(0, 10)}...` : null,
     game.lastAction
       ? `Last: ${game.lastAction.action} ${
           game.lastAction.amount ?? 0
@@ -214,7 +256,7 @@ function updateGameUI() {
   ].filter(Boolean);
   gameStatus.textContent = statusParts.join(" | ");
   winnerPanel.textContent = game.winner
-    ? `Winner: ${game.winner}`
+    ? `${game.winner}`
     : "No winner yet.";
   renderCommunityCards(game.community || []);
   updateSeats(game.players || [], game.currentTurnIndex, game.winner);
@@ -305,21 +347,37 @@ function updateSeats(players, turnIndex, winnerHash) {
 
 async function verifyHuman() {
   try {
+    if (state.playerHash) {
+      await api("/api/join-table", { playerHash: state.playerHash });
+      await api("/api/register-key", {
+        playerHash: state.playerHash,
+        playerKey: state.playerKey
+      });
+      playerHashLabel.textContent = `Player hash: ${state.playerHash.slice(
+        0,
+        16
+      )}...`;
+      setBadge(humanBadge, "Human: identified", "");
+      startLiveness();
+      return;
+    }
     if (!state.stream) {
       logProof("Face proof", { error: "Webcam stream unavailable." });
-      setBadge(humanBadge, "Human: no camera", "bad");
+      setBadge(humanBadge, "Human: un-identified", "bad");
+      return;
+    }
+    const identified = await detectFaceInVideo();
+    if (!identified) {
+      setBadge(humanBadge, "Human: un-identified", "bad");
       return;
     }
     const frames = [];
-    for (let i = 0; i < 3; i += 1) {
-      const frame = captureFrame();
-      if (!frame) {
-        setBadge(humanBadge, "Human: camera blocked", "bad");
-        return;
-      }
-      frames.push(frame);
-      await sleep(120);
+    const frame = captureFrame();
+    if (!frame) {
+      setBadge(humanBadge, "Human: un-identified", "bad");
+      return;
     }
+    frames.push(frame);
     const embedding = await poseidonHashMock(frames.join("|"));
     const result = await api("/api/face-verify", { embedding });
     state.playerHash = result.hash;
@@ -327,7 +385,7 @@ async function verifyHuman() {
     playerHashLabel.textContent = `Player hash: ${result.hash.slice(0, 16)}...`;
     setBadge(
       humanBadge,
-      result.unique ? "Human: verified" : "Human: reused",
+      result.unique ? "Human: identified" : "Human: identified",
       result.unique ? "" : "warn"
     );
     logProof("Face proof", result);
@@ -426,22 +484,6 @@ async function settleHand() {
   potDisplay.textContent = "$0";
 }
 
-joinTableBtn.addEventListener("click", async () => {
-  if (!state.playerHash) {
-    await verifyHuman();
-  } else {
-    await api("/api/join-table", { playerHash: state.playerHash });
-    await api("/api/register-key", {
-      playerHash: state.playerHash,
-      playerKey: state.playerKey
-    });
-    startLiveness();
-  }
-  if (!gameIdInput.value) {
-    gameIdInput.value = "demo";
-  }
-  await joinGame();
-});
 
 verifyFaceBtn.addEventListener("click", verifyHuman);
 dealBtn.addEventListener("click", dealHands);
@@ -502,6 +544,41 @@ async function joinGame() {
 }
 
 joinGameBtn.addEventListener("click", joinGame);
+simulateBtn.addEventListener("click", async () => {
+  if (!state.gameId) {
+    await joinGame();
+  }
+  await simulateGame();
+});
+
+async function simulateGame() {
+  let safety = 0;
+  while (safety < 60) {
+    safety += 1;
+    const res = await fetch(`/api/game/status?gameId=${state.gameId}`);
+    if (!res.ok) {
+      logProof("Simulate error", { error: "Game not available." });
+      return;
+    }
+    const data = await res.json();
+    state.game = data.game;
+    updateGameUI();
+    if (!state.game || state.game.phase === "showdown") {
+      return;
+    }
+    const pending = state.game.pendingActors || [];
+    for (const playerHash of pending) {
+      await api("/api/game/action", {
+        gameId: state.gameId,
+        playerHash,
+        action: state.game.currentBet > 0 ? "call" : "check",
+        amount: state.game.currentBet > 0 ? state.game.currentBet : 0
+      });
+      await sleep(250);
+    }
+  }
+  logProof("Simulate warning", { error: "Simulation exceeded steps." });
+}
 stopStreamBtn.addEventListener("click", stopWebcam);
 
 function startLiveness() {
@@ -510,14 +587,19 @@ function startLiveness() {
   }
   state.livenessTimer = setInterval(async () => {
     if (!state.playerHash || !state.stream) {
-      setBadge(humanBadge, "Human: liveness failed", "bad");
+      setBadge(humanBadge, "Human: un-identified", "bad");
       setBadge(streamStatus, "Stream: offline", "bad");
       return;
     }
     try {
+      const identified = await detectFaceInVideo();
+      if (!identified) {
+        setBadge(humanBadge, "Human: un-identified", "bad");
+        return;
+      }
       const frame = captureFrame();
       if (!frame) {
-        setBadge(humanBadge, "Human: liveness failed", "bad");
+        setBadge(humanBadge, "Human: un-identified", "bad");
         setBadge(streamStatus, "Stream: blocked", "bad");
         return;
       }
@@ -527,16 +609,16 @@ function startLiveness() {
         embedding
       });
       if (result.alive) {
-        setBadge(humanBadge, "Human: live", "");
+        setBadge(humanBadge, "Human: identified", "");
         setBadge(streamStatus, "Stream: live", "");
       } else {
-        setBadge(humanBadge, "Human: liveness failed", "bad");
+        setBadge(humanBadge, "Human: un-identified", "bad");
       }
     } catch (error) {
-      setBadge(humanBadge, "Human: liveness failed", "bad");
+      setBadge(humanBadge, "Human: un-identified", "bad");
       logProof("Liveness error", { error: error.message });
     }
-  }, 5000);
+  }, state.faceDetectIntervalMs);
 }
 
 if (state.playerHash) {

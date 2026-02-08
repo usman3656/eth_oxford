@@ -329,6 +329,137 @@ function serializeGame(game) {
   };
 }
 
+function createBot(game) {
+  const botId = `bot-${game.players.filter((p) => p.isBot).length + 1}`;
+  return {
+    hash: botId,
+    folded: false,
+    stack: 100,
+    lastAction: null,
+    isBot: true
+  };
+}
+
+function handleAction(game, playerHash, action, amount = 0) {
+  const playerIndex = game.players.findIndex(
+    (player) => player.hash === playerHash
+  );
+  if (playerIndex === -1) {
+    return "player not in game";
+  }
+  const pendingSet = new Set(game.pendingActors);
+  const isPending = pendingSet.has(playerHash);
+  const isTurn =
+    game.players[game.currentTurnIndex]?.hash === playerHash ||
+    !game.players[game.currentTurnIndex];
+  if (!isTurn && !isPending) {
+    return "not your turn";
+  }
+  if (!isTurn && isPending) {
+    game.currentTurnIndex = playerIndex;
+  }
+
+  const parsedAmount = Number(amount);
+  const safeAmount = Number.isFinite(parsedAmount) ? parsedAmount : 0;
+  const player = game.players[playerIndex];
+
+  if (action === "fold") {
+    player.folded = true;
+    player.lastAction = "fold";
+    removePending(game, playerHash);
+  } else if (action === "check") {
+    if (game.currentBet > 0) {
+      return "cannot check";
+    }
+    player.lastAction = "check";
+    removePending(game, playerHash);
+  } else if (action === "call") {
+    const prev = game.roundBets.get(playerHash) || 0;
+    const required = Math.max(game.currentBet - prev, 0);
+    if (safeAmount !== required) {
+      return "call amount must match bet";
+    }
+    if (required === 0) {
+      player.lastAction = "check";
+    } else {
+      game.pot += required;
+      game.roundBets.set(playerHash, prev + required);
+      player.lastAction = `call ${required}`;
+    }
+    removePending(game, playerHash);
+  } else if (action === "raise") {
+    if (safeAmount <= game.currentBet) {
+      return "raise too small";
+    }
+    const prev = game.roundBets.get(playerHash) || 0;
+    const delta = safeAmount - prev;
+    game.pot += delta;
+    game.currentBet = safeAmount;
+    game.roundBets.set(playerHash, safeAmount);
+    player.lastAction = `raise ${safeAmount}`;
+    const activeHashes = game.players
+      .filter((p) => !p.folded)
+      .map((p) => p.hash)
+      .filter((hash) => hash !== playerHash);
+    game.pendingActors = activeHashes;
+  } else {
+    return "invalid action";
+  }
+
+  game.lastAction = {
+    player: playerHash,
+    action,
+    amount: safeAmount
+  };
+  game.actionCount += 1;
+
+  const activePlayers = game.players.filter((p) => !p.folded);
+  if (activePlayers.length <= 1) {
+    game.phase = "showdown";
+    game.winner = activePlayers[0]?.hash || null;
+  } else {
+    game.currentTurnIndex = nextActiveIndex(game.players, game.currentTurnIndex);
+    if (game.pendingActors.length === 0) {
+      advancePhase(game);
+      if (game.phase === "showdown") {
+        if (!game.winner) {
+          game.winner = activePlayers[0]?.hash || null;
+        }
+      } else {
+        startRound(game);
+        game.currentTurnIndex = nextActiveIndex(game.players, -1);
+      }
+    }
+  }
+
+  game.updatedAt = Date.now();
+  return null;
+}
+
+function runBotTurns(game) {
+  let safety = 0;
+  while (safety < 10) {
+    safety += 1;
+    const current = game.players[game.currentTurnIndex];
+    if (!current || !current.isBot) {
+      break;
+    }
+    if (!game.pendingActors.includes(current.hash)) {
+      break;
+    }
+    const prev = game.roundBets.get(current.hash) || 0;
+    const required = Math.max(game.currentBet - prev, 0);
+    const action = required > 0 ? "call" : "check";
+    const error = handleAction(game, current.hash, action, required);
+    if (error) {
+      break;
+    }
+    if (game.phase === "showdown") {
+      break;
+    }
+  }
+}
+
 function startRound(game) {
   const activeHashes = game.players
     .filter((player) => !player.folded)
@@ -400,103 +531,59 @@ app.post("/api/game/action", (req, res) => {
     res.status(400).json({ error: "missing gameId" });
     return;
   }
-  const playerIndex = game.players.findIndex(
-    (player) => player.hash === playerHash
-  );
-  if (playerIndex === -1) {
-    res.status(400).json({ error: "player not in game" });
+  const error = handleAction(game, playerHash, action, amount);
+  if (error) {
+    res.status(400).json({ error });
     return;
   }
-  const pendingSet = new Set(game.pendingActors);
-  const isPending = pendingSet.has(playerHash);
-  const isTurn =
-    game.players[game.currentTurnIndex]?.hash === playerHash ||
-    !game.players[game.currentTurnIndex];
-  if (!isTurn && !isPending) {
-    res.status(400).json({ error: "not your turn" });
+  runBotTurns(game);
+  res.json({ game: serializeGame(game) });
+});
+
+app.post("/api/game/bots/add", (req, res) => {
+  const { gameId, count = 1 } = req.body;
+  const game = getOrCreateGame(gameId);
+  if (!game) {
+    res.status(400).json({ error: "missing gameId" });
     return;
   }
-  if (!isTurn && isPending) {
-    game.currentTurnIndex = playerIndex;
+  const addCount = Math.max(1, Math.min(Number(count) || 1, 4));
+  for (let i = 0; i < addCount; i += 1) {
+    game.players.push(createBot(game));
   }
+  if (game.players.length >= 2 && game.phase === "waiting") {
+    initializeGame(game);
+    game.currentTurnIndex = 0;
+  }
+  runBotTurns(game);
+  game.updatedAt = Date.now();
+  res.json({ game: serializeGame(game) });
+});
 
-  const parsedAmount = Number(amount);
-  const safeAmount = Number.isFinite(parsedAmount) ? parsedAmount : 0;
-  const player = game.players[playerIndex];
-
-  if (action === "fold") {
-    player.folded = true;
-    player.lastAction = "fold";
-    removePending(game, playerHash);
-  } else if (action === "check") {
-    if (game.currentBet > 0) {
-      res.status(400).json({ error: "cannot check" });
-      return;
-    }
-    player.lastAction = "check";
-    removePending(game, playerHash);
-  } else if (action === "call") {
-    const prev = game.roundBets.get(playerHash) || 0;
-    const required = Math.max(game.currentBet - prev, 0);
-    if (safeAmount !== required) {
-      res.status(400).json({ error: "call amount must match bet" });
-      return;
-    }
-    if (required === 0) {
-      player.lastAction = "check";
-    } else {
-      game.pot += required;
-      game.roundBets.set(playerHash, prev + required);
-      player.lastAction = `call ${required}`;
-    }
-    removePending(game, playerHash);
-  } else if (action === "raise") {
-    if (safeAmount <= game.currentBet) {
-      res.status(400).json({ error: "raise too small" });
-      return;
-    }
-    const prev = game.roundBets.get(playerHash) || 0;
-    const delta = safeAmount - prev;
-    game.pot += delta;
-    game.currentBet = safeAmount;
-    game.roundBets.set(playerHash, safeAmount);
-    player.lastAction = `raise ${safeAmount}`;
-    const activeHashes = game.players
-      .filter((p) => !p.folded)
-      .map((p) => p.hash)
-      .filter((hash) => hash !== playerHash);
-    game.pendingActors = activeHashes;
-  } else {
-    res.status(400).json({ error: "invalid action" });
+app.post("/api/game/bots/remove", (req, res) => {
+  const { gameId, count = 1 } = req.body;
+  const game = getOrCreateGame(gameId);
+  if (!game) {
+    res.status(400).json({ error: "missing gameId" });
     return;
   }
-
-  game.lastAction = {
-    player: playerHash,
-    action,
-    amount: safeAmount
-  };
-  game.actionCount += 1;
-
-  const activePlayers = game.players.filter((p) => !p.folded);
-  if (activePlayers.length <= 1) {
-    game.phase = "showdown";
-    game.winner = activePlayers[0]?.hash || null;
-  } else {
-    game.currentTurnIndex = nextActiveIndex(game.players, game.currentTurnIndex);
-    if (game.pendingActors.length === 0) {
-      advancePhase(game);
-      if (game.phase === "showdown") {
-        if (!game.winner) {
-          game.winner = activePlayers[0]?.hash || null;
-        }
-      } else {
-        startRound(game);
-        game.currentTurnIndex = nextActiveIndex(game.players, -1);
-      }
+  const removeCount = Math.max(1, Math.min(Number(count) || 1, 4));
+  for (let i = 0; i < removeCount; i += 1) {
+    const idx = [...game.players]
+      .reverse()
+      .findIndex((p) => p.isBot);
+    if (idx === -1) {
+      break;
+    }
+    const removeIndex = game.players.length - 1 - idx;
+    const removed = game.players.splice(removeIndex, 1)[0];
+    if (removed) {
+      game.pendingActors = game.pendingActors.filter((h) => h !== removed.hash);
+      game.roundBets.delete(removed.hash);
+      game.hands.delete(removed.hash);
+      game.encryptedHands.delete(removed.hash);
     }
   }
-
   game.updatedAt = Date.now();
   res.json({ game: serializeGame(game) });
 });

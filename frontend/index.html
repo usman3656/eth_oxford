@@ -25,6 +25,7 @@
           <div class="media-row">
             <video id="webcam" autoplay playsinline muted></video>
             <canvas id="snapshot" width="220" height="160"></canvas>
+            <canvas id="processing" width="220" height="160" class="hidden"></canvas>
           </div>
           <div class="meta-row">
             <span id="playerHash" class="mono">Player hash: -</span>
@@ -138,6 +139,14 @@
             <button id="simulateBtn" class="ghost">Simulate Game</button>
           </div>
           <div id="gameStatus" class="meta-row">No game joined.</div>
+        </div>
+
+        <div class="panel-block">
+          <h2>Bots</h2>
+          <div class="action-group">
+            <button id="addBotBtn" class="ghost">Add Bot</button>
+            <button id="removeBotBtn" class="ghost">Remove Bot</button>
+          </div>
         </div>
 
         <div class="panel-block players">

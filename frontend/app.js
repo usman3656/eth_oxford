@@ -45,7 +45,8 @@ const state = {
   faceDetectBusy: false,
   faceDetectIntervalMs: 1500,
   faceHistory: [],
-  lockedFaceHash: sessionStore.getItem("zkpoker.lockedFaceHash"),
+  lockedFaceDescriptor: null,
+  lockedDescriptorSamples: [],
   faceMismatchCount: 0,
   lastBotActionSig: null
 };
@@ -53,6 +54,14 @@ const state = {
 sessionStore.setItem("zkpoker.playerKey", state.playerKey);
 if (state.gameId && gameIdInput) {
   gameIdInput.value = state.gameId;
+}
+const storedDescriptor = sessionStore.getItem("zkpoker.lockedFaceDescriptor");
+if (storedDescriptor) {
+  try {
+    state.lockedFaceDescriptor = JSON.parse(storedDescriptor);
+  } catch (error) {
+    state.lockedFaceDescriptor = null;
+  }
 }
 
 function logProof(label, payload) {
@@ -146,6 +155,8 @@ async function initFaceModel() {
       "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
     await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
     await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
     state.faceModelReady = true;
   } catch (error) {
     state.faceModelError = error.message;
@@ -163,87 +174,73 @@ function getFrameData() {
   }
 }
 
-function getCenterCrop(imageData, cropRatio = 0.6) {
-  if (!imageData) {
-    return null;
-  }
-  const { data, width, height } = imageData;
-  const cropW = Math.floor(width * cropRatio);
-  const cropH = Math.floor(height * cropRatio);
-  const startX = Math.floor((width - cropW) / 2);
-  const startY = Math.floor((height - cropH) / 2);
-  const cropped = new Uint8ClampedArray(cropW * cropH * 4);
-  for (let y = 0; y < cropH; y += 1) {
-    for (let x = 0; x < cropW; x += 1) {
-      const src = ((startY + y) * width + (startX + x)) * 4;
-      const dst = (y * cropW + x) * 4;
-      cropped[dst] = data[src];
-      cropped[dst + 1] = data[src + 1];
-      cropped[dst + 2] = data[src + 2];
-      cropped[dst + 3] = data[src + 3];
-    }
-  }
-  return { data: cropped, width: cropW, height: cropH };
-}
-
-function getBoxCrop(imageData, box) {
-  if (!imageData || !box) {
-    return null;
-  }
-  const { data, width, height } = imageData;
-  const x = Math.max(0, Math.floor(box.x));
-  const y = Math.max(0, Math.floor(box.y));
-  const w = Math.min(width - x, Math.floor(box.width));
-  const h = Math.min(height - y, Math.floor(box.height));
-  if (w <= 0 || h <= 0) {
-    return null;
-  }
-  const cropped = new Uint8ClampedArray(w * h * 4);
-  for (let yy = 0; yy < h; yy += 1) {
-    for (let xx = 0; xx < w; xx += 1) {
-      const src = ((y + yy) * width + (x + xx)) * 4;
-      const dst = (yy * w + xx) * 4;
-      cropped[dst] = data[src];
-      cropped[dst + 1] = data[src + 1];
-      cropped[dst + 2] = data[src + 2];
-      cropped[dst + 3] = data[src + 3];
-    }
-  }
-  return { data: cropped, width: w, height: h };
-}
-
-function computeAHash(imageData, size = 8) {
-  if (!imageData) {
-    return null;
-  }
-  const { data, width, height } = imageData;
-  const stepX = Math.floor(width / size);
-  const stepY = Math.floor(height / size);
-  const grays = [];
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const px = (y * stepY * width + x * stepX) * 4;
-      const r = data[px];
-      const g = data[px + 1];
-      const b = data[px + 2];
-      grays.push((r + g + b) / 3);
-    }
-  }
-  const mean = grays.reduce((a, b) => a + b, 0) / grays.length;
-  return grays.map((g) => (g > mean ? "1" : "0")).join("");
-}
-
-function hammingDistance(a, b) {
+function descriptorDistance(a, b) {
   if (!a || !b || a.length !== b.length) {
     return Number.POSITIVE_INFINITY;
   }
-  let dist = 0;
+  let sum = 0;
   for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) {
-      dist += 1;
+    const diff = a[i] - b[i];
+    sum += diff * diff;
+  }
+  return Math.sqrt(sum);
+}
+
+function storeLockedDescriptor(descriptor) {
+  if (!descriptor) {
+    return;
+  }
+  const array = Array.from(descriptor);
+  state.lockedFaceDescriptor = array;
+  sessionStore.setItem("zkpoker.lockedFaceDescriptor", JSON.stringify(array));
+}
+
+function addLockedDescriptorSample(descriptor) {
+  if (!descriptor) {
+    return;
+  }
+  const array = Array.from(descriptor);
+  state.lockedDescriptorSamples.push(array);
+  if (state.lockedDescriptorSamples.length > 5) {
+    state.lockedDescriptorSamples.shift();
+  }
+}
+
+function minDescriptorDistance(samples, descriptor) {
+  if (!samples.length || !descriptor) {
+    return Number.POSITIVE_INFINITY;
+  }
+  let best = Number.POSITIVE_INFINITY;
+  for (const sample of samples) {
+    const dist = descriptorDistance(sample, descriptor);
+    if (dist < best) {
+      best = dist;
     }
   }
-  return dist;
+  return best;
+}
+
+async function getDescriptorFromCanvas(canvasEl) {
+  if (!canvasEl) {
+    return null;
+  }
+  await initFaceModel();
+  if (!state.faceModelReady) {
+    return null;
+  }
+  const detection = await faceapi
+    .detectSingleFace(
+      canvasEl,
+      new faceapi.SsdMobilenetv1Options({
+        minConfidence: 0.25
+      })
+    )
+    .withFaceLandmarks()
+    .withFaceDescriptor();
+  if (!detection) {
+    return null;
+  }
+  return detection.descriptor || null;
 }
 
 async function detectFaceDetections() {
@@ -265,7 +262,7 @@ async function detectFaceDetections() {
     const ssdDetections = await faceapi.detectAllFaces(
       webcam,
       new faceapi.SsdMobilenetv1Options({
-        minConfidence: 0.2
+        minConfidence: 0.25
       })
     );
     if (ssdDetections && ssdDetections.length > 0) {
@@ -274,101 +271,14 @@ async function detectFaceDetections() {
     const tinyDetections = await faceapi.detectAllFaces(
       webcam,
       new faceapi.TinyFaceDetectorOptions({
-        inputSize: 512,
-        scoreThreshold: 0.12
+        inputSize: 416,
+        scoreThreshold: 0.2
       })
     );
     return tinyDetections || [];
   } finally {
     state.faceDetectBusy = false;
   }
-}
-
-async function detectFaceDetectionsNew() {
-  if (!state.stream) {
-    return [];
-  }
-  if (state.faceDetectBusy) {
-    return [];
-  }
-  if (webcam.readyState < 2) {
-    return [];
-  }
-  await initFaceModel();
-  if (!state.faceModelReady) {
-    return [];
-  }
-  state.faceDetectBusy = true;
-  try {
-    const ssdSingle = await faceapi.detectSingleFace(
-      webcam,
-      new faceapi.SsdMobilenetv1Options({
-        minConfidence: 0.2
-      })
-    );
-    if (ssdSingle) {
-      return [ssdSingle];
-    }
-    const ssdDetections = await faceapi.detectAllFaces(
-      webcam,
-      new faceapi.SsdMobilenetv1Options({
-        minConfidence: 0.2
-      })
-    );
-    if (ssdDetections && ssdDetections.length > 0) {
-      return ssdDetections;
-    }
-    const tinySingle = await faceapi.detectSingleFace(
-      webcam,
-      new faceapi.TinyFaceDetectorOptions({
-        inputSize: 512,
-        scoreThreshold: 0.1
-      })
-    );
-    if (tinySingle) {
-      return [tinySingle];
-    }
-    const tinyDetections = await faceapi.detectAllFaces(
-      webcam,
-      new faceapi.TinyFaceDetectorOptions({
-        inputSize: 512,
-        scoreThreshold: 0.1
-      })
-    );
-    return tinyDetections || [];
-  } finally {
-    state.faceDetectBusy = false;
-  }
-}
-
-function selectRepresentativeHash(hashes) {
-  if (!hashes.length) {
-    return null;
-  }
-  let bestHash = hashes[0];
-  let bestScore = Number.POSITIVE_INFINITY;
-  for (const candidate of hashes) {
-    let score = 0;
-    for (const other of hashes) {
-      score += hammingDistance(candidate, other);
-    }
-    if (score < bestScore) {
-      bestScore = score;
-      bestHash = candidate;
-    }
-  }
-  return bestHash;
-}
-
-function pickLargestDetection(detections) {
-  if (!detections || !detections.length) {
-    return null;
-  }
-  return detections.reduce((best, current) => {
-    const bestArea = best.box.width * best.box.height;
-    const currentArea = current.box.width * current.box.height;
-    return currentArea > bestArea ? current : best;
-  });
 }
 
 function updateFaceHistory(detected) {
@@ -605,6 +515,15 @@ function updateSeats(players, turnIndex, winnerHash) {
 async function verifyHuman() {
   try {
     if (state.playerHash) {
+      const locked = await ensureFaceLock();
+      if (!locked) {
+        logProof("Verify Human", {
+          status: "un-identified",
+          reason: "no face detected"
+        });
+        setBadge(humanBadge, "Human: un-identified", "bad");
+        return;
+      }
       await api("/api/join-table", { playerHash: state.playerHash });
       await api("/api/register-key", {
         playerHash: state.playerHash,
@@ -615,16 +534,24 @@ async function verifyHuman() {
         16
       )}...`;
       setBadge(humanBadge, "Human: identified", "");
+      logProof("Verify Human", { status: "identified", reason: "face matched" });
       startLiveness();
       return;
     }
     if (!state.stream) {
-      logProof("Face proof", { error: "Webcam stream unavailable." });
+      logProof("Verify Human", {
+        status: "un-identified",
+        reason: "webcam stream unavailable"
+      });
       setBadge(humanBadge, "Human: un-identified", "bad");
       return;
     }
     const locked = await ensureFaceLock();
     if (!locked) {
+      logProof("Verify Human", {
+        status: "un-identified",
+        reason: "no face detected"
+      });
       setBadge(humanBadge, "Human: un-identified", "bad");
       return;
     }
@@ -646,6 +573,7 @@ async function verifyHuman() {
       result.unique ? "" : "warn"
     );
     logProof("Face proof", result);
+    logProof("Verify Human", { status: "identified", reason: "face matched" });
     await api("/api/join-table", { playerHash: result.hash });
     await api("/api/register-key", {
       playerHash: result.hash,
@@ -886,9 +814,6 @@ function startLiveness() {
       return;
     }
     try {
-      if (!state.lockedFaceHash) {
-        drawSnapshot();
-      }
       const locked = await ensureFaceLock();
       if (!locked) {
         setBadge(humanBadge, "Human: un-identified", "bad");
@@ -922,52 +847,36 @@ async function ensureFaceLock() {
   if (!state.stream) {
     return false;
   }
-  if (!state.lockedFaceHash) {
-    const hashes = [];
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const detections = await detectFaceDetections();
-      if (detections.length >= 1) {
-        const imageData = getFrameData();
-        const best = pickLargestDetection(detections);
-        const box = best?.box;
-        const faceCrop = getBoxCrop(imageData, box) || getCenterCrop(imageData);
-        const frameHash = computeAHash(faceCrop);
-        if (frameHash) {
-          hashes.push(frameHash);
-          if (hashes.length >= 1) {
-            const locked = selectRepresentativeHash(hashes);
-            state.lockedFaceHash = locked;
-            sessionStore.setItem("zkpoker.lockedFaceHash", locked);
-            const snapCtx = snapshot.getContext("2d");
-            snapCtx.drawImage(webcam, 0, 0, snapshot.width, snapshot.height);
-            state.faceMismatchCount = 0;
-            return true;
-          }
-        }
-      }
-      await sleep(150);
-    }
-    return false;
-  }
   const detections = await detectFaceDetections();
   if (detections.length === 0) {
     return false;
   }
-  const imageData = getFrameData();
-  const best = pickLargestDetection(detections);
-  const box = best?.box;
-  const faceCrop = getBoxCrop(imageData, box) || getCenterCrop(imageData);
-  const frameHash = computeAHash(faceCrop);
-  if (!frameHash) {
-    return false;
-  }
-  const distance = hammingDistance(state.lockedFaceHash, frameHash);
-  if (distance <= 80) {
+  if (!state.lockedFaceDescriptor) {
+    const snapCtx = snapshot.getContext("2d");
+    snapCtx.drawImage(webcam, 0, 0, snapshot.width, snapshot.height);
+    const snapDescriptor = await getDescriptorFromCanvas(snapshot);
+    if (!snapDescriptor) {
+      return false;
+    }
+    storeLockedDescriptor(snapDescriptor);
+    state.lockedDescriptorSamples = [];
+    addLockedDescriptorSample(snapDescriptor);
     state.faceMismatchCount = 0;
     return true;
   }
-  state.faceMismatchCount += 1;
-  return state.faceMismatchCount < 12;
+  const liveDescriptor = await getDescriptorFromCanvas(webcam);
+  if (!liveDescriptor) {
+    return false;
+  }
+  const descriptorDist = Math.min(
+    descriptorDistance(state.lockedFaceDescriptor, liveDescriptor),
+    minDescriptorDistance(state.lockedDescriptorSamples, liveDescriptor)
+  );
+  if (descriptorDist > 0.6) {
+    return false;
+  }
+  addLockedDescriptorSample(liveDescriptor);
+  return true;
 }
 
 if (state.playerHash) {

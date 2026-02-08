@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZK-LivePoker MVP</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="table-layout">
+      <header class="topbar">
+        <div>
+          <h1>ZK-LivePoker</h1>
+          <p>Verifiable hands, human presence, honest bets.</p>
+        </div>
+        <div class="status-pills">
+          <span id="humanBadge" class="pill muted">Human: not verified</span>
+          <span id="streamStatus" class="pill muted">Stream: offline</span>
+        </div>
+      </header>
+
+      <section class="table-wrap">
+        <div class="table-felt">
+          <div class="table-center">
+            <div class="pot">
+              <div class="pot-label">Pot</div>
+              <div id="potDisplay" class="pot-value">$0</div>
+            </div>
+            <div class="community-cards">
+              <div class="card">??</div>
+              <div class="card">??</div>
+              <div class="card">??</div>
+              <div class="card">??</div>
+              <div class="card">??</div>
+            </div>
+          </div>
+
+          <div class="seat seat-top">
+            <div class="avatar">P2</div>
+            <div class="seat-meta">
+              <div class="name">Opponent A</div>
+              <div class="stack">$120</div>
+            </div>
+            <div class="hole-cards small">
+              <div class="card">??</div>
+              <div class="card">??</div>
+            </div>
+          </div>
+
+          <div class="seat seat-left">
+            <div class="avatar">P3</div>
+            <div class="seat-meta">
+              <div class="name">Opponent B</div>
+              <div class="stack">$80</div>
+            </div>
+            <div class="hole-cards small">
+              <div class="card">??</div>
+              <div class="card">??</div>
+            </div>
+          </div>
+
+          <div class="seat seat-right">
+            <div class="avatar">P4</div>
+            <div class="seat-meta">
+              <div class="name">Opponent C</div>
+              <div class="stack">$60</div>
+            </div>
+            <div class="hole-cards small">
+              <div class="card">??</div>
+              <div class="card">??</div>
+            </div>
+          </div>
+
+          <div class="seat seat-bottom">
+            <div class="avatar me">ME</div>
+            <div class="seat-meta">
+              <div class="name">You</div>
+              <div class="stack">$100</div>
+            </div>
+            <div class="hole-cards">
+              <div class="card">??</div>
+              <div class="card">??</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="actions">
+        <div class="action-group">
+          <button id="joinTableBtn">Join Table</button>
+          <button id="verifyFaceBtn">Verify Human</button>
+          <button id="dealBtn">Deal</button>
+          <button id="verifyHandBtn">Verify</button>
+          <button id="revealBtn">Reveal</button>
+        </div>
+        <div class="action-group">
+          <button id="foldBtn" class="ghost">Fold</button>
+          <button id="checkBtn" class="ghost">Check</button>
+          <button id="callBtn">Call</button>
+          <button id="raiseBtn" class="accent">Raise</button>
+        </div>
+      </section>
+
+      <section class="side-panel">
+        <div class="panel-block">
+          <h2>Game</h2>
+          <div class="game-row">
+            <input id="gameIdInput" class="input" placeholder="Enter game id" />
+            <button id="joinGameBtn">Join Game</button>
+          </div>
+          <div id="gameStatus" class="meta-row">No game joined.</div>
+        </div>
+
+        <div class="panel-block">
+          <h2>Live Presence</h2>
+          <div class="media-row">
+            <video id="webcam" autoplay playsinline muted></video>
+            <canvas id="snapshot" width="220" height="160"></canvas>
+          </div>
+          <div class="meta-row">
+            <span id="playerHash" class="mono">Player hash: -</span>
+          </div>
+          <div class="action-group">
+            <button id="stopStreamBtn" class="ghost">Close Stream</button>
+          </div>
+        </div>
+
+        <div class="panel-block">
+          <h2>Players</h2>
+          <div id="playersList" class="list-body">No players yet.</div>
+        </div>
+
+        <div class="panel-block">
+          <h2>Winner</h2>
+          <div id="winnerPanel" class="winner">No winner yet.</div>
+        </div>
+
+        <div class="panel-block">
+          <h2>Proof Console</h2>
+          <pre id="proofConsole" class="console">Ready.</pre>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

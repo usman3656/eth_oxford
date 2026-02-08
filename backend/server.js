@@ -28,8 +28,170 @@ const state = {
   lastWinner: null
 };
 
+const RANK_VALUES = {
+  "2": 2,
+  "3": 3,
+  "4": 4,
+  "5": 5,
+  "6": 6,
+  "7": 7,
+  "8": 8,
+  "9": 9,
+  "10": 10,
+  J: 11,
+  Q: 12,
+  K: 13,
+  A: 14
+};
+
+function parseCard(card) {
+  const trimmed = String(card || "").trim();
+  const suit = trimmed.slice(-1);
+  const rank = trimmed.slice(0, -1);
+  return {
+    rank,
+    rankValue: RANK_VALUES[rank] || 0,
+    suit
+  };
+}
+
+function getStraightHigh(ranks) {
+  const unique = Array.from(new Set(ranks)).sort((a, b) => a - b);
+  if (unique.includes(14)) {
+    unique.unshift(1);
+  }
+  let streak = 1;
+  let bestHigh = null;
+  for (let i = 1; i < unique.length; i += 1) {
+    if (unique[i] === unique[i - 1] + 1) {
+      streak += 1;
+    } else if (unique[i] !== unique[i - 1]) {
+      streak = 1;
+    }
+    if (streak >= 5) {
+      bestHigh = unique[i];
+    }
+  }
+  return bestHigh;
+}
+
+function evaluateFive(cards) {
+  const parsed = cards.map(parseCard);
+  const ranks = parsed.map((c) => c.rankValue).sort((a, b) => b - a);
+  const suits = parsed.map((c) => c.suit);
+  const isFlush = suits.every((suit) => suit === suits[0]);
+  const straightHigh = getStraightHigh(ranks);
+
+  const counts = new Map();
+  for (const rank of ranks) {
+    counts.set(rank, (counts.get(rank) || 0) + 1);
+  }
+  const groups = Array.from(counts.entries()).sort((a, b) => {
+    if (b[1] !== a[1]) {
+      return b[1] - a[1];
+    }
+    return b[0] - a[0];
+  });
+  const ranksByCount = groups.map(([rank, count]) => ({ rank, count }));
+  const triples = ranksByCount.filter((g) => g.count === 3).map((g) => g.rank);
+  const pairs = ranksByCount.filter((g) => g.count === 2).map((g) => g.rank);
+
+  if (isFlush && straightHigh) {
+    if (straightHigh === 14) {
+      return { rank: 9, tiebreaker: [14] };
+    }
+    return { rank: 8, tiebreaker: [straightHigh] };
+  }
+  if (ranksByCount[0]?.count === 4) {
+    const quad = ranksByCount[0].rank;
+    const kicker = ranks.find((r) => r !== quad);
+    return { rank: 7, tiebreaker: [quad, kicker] };
+  }
+  if (triples.length >= 1 && (pairs.length >= 1 || triples.length >= 2)) {
+    const triple = triples[0];
+    const pair = pairs[0] || triples[1];
+    return { rank: 6, tiebreaker: [triple, pair] };
+  }
+  if (isFlush) {
+    return { rank: 5, tiebreaker: [...ranks] };
+  }
+  if (straightHigh) {
+    return { rank: 4, tiebreaker: [straightHigh] };
+  }
+  if (triples.length >= 1) {
+    const triple = triples[0];
+    const kickers = ranks.filter((r) => r !== triple).slice(0, 2);
+    return { rank: 3, tiebreaker: [triple, ...kickers] };
+  }
+  if (pairs.length >= 2) {
+    const [highPair, lowPair] = pairs.sort((a, b) => b - a);
+    const kicker = ranks.find((r) => r !== highPair && r !== lowPair);
+    return { rank: 2, tiebreaker: [highPair, lowPair, kicker] };
+  }
+  if (pairs.length === 1) {
+    const pair = pairs[0];
+    const kickers = ranks.filter((r) => r !== pair).slice(0, 3);
+    return { rank: 1, tiebreaker: [pair, ...kickers] };
+  }
+  return { rank: 0, tiebreaker: [...ranks] };
+}
+
+function compareHands(a, b) {
+  if (a.rank !== b.rank) {
+    return a.rank - b.rank;
+  }
+  const len = Math.max(a.tiebreaker.length, b.tiebreaker.length);
+  for (let i = 0; i < len; i += 1) {
+    const diff = (a.tiebreaker[i] || 0) - (b.tiebreaker[i] || 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
+function bestHandFromSeven(cards) {
+  let best = null;
+  for (let a = 0; a < cards.length - 4; a += 1) {
+    for (let b = a + 1; b < cards.length - 3; b += 1) {
+      for (let c = b + 1; c < cards.length - 2; c += 1) {
+        for (let d = c + 1; d < cards.length - 1; d += 1) {
+          for (let e = d + 1; e < cards.length; e += 1) {
+            const hand = evaluateFive([cards[a], cards[b], cards[c], cards[d], cards[e]]);
+            if (!best || compareHands(hand, best) > 0) {
+              best = hand;
+            }
+          }
+        }
+      }
+    }
+  }
+  return best;
+}
+
+function determineWinners(game) {
+  const community = game.community.slice(0, 5);
+  const contenders = game.players.filter((p) => !p.folded);
+  let best = null;
+  let winners = [];
+  for (const player of contenders) {
+    const hand = game.hands.get(player.hash);
+    if (!hand || hand.length < 2 || community.length < 5) {
+      continue;
+    }
+    const evaluation = bestHandFromSeven([...hand, ...community]);
+    if (!best || compareHands(evaluation, best) > 0) {
+      best = evaluation;
+      winners = [player.hash];
+    } else if (best && compareHands(evaluation, best) === 0) {
+      winners.push(player.hash);
+    }
+  }
+  return { winners, best };
+}
+
 function buildDeck() {
-  const suits = ["S", "H", "D", "C"];
+  const suits = ["♠", "♥", "♦", "♣"];
   const ranks = [
     "A",
     "2",
@@ -221,6 +383,10 @@ function getOrCreateGame(gameId) {
       pot: 0,
       phase: "waiting",
       currentTurnIndex: 0,
+      dealerIndex: 0,
+      smallBlind: 5,
+      bigBlind: 10,
+      handNumber: 0,
       lastAction: null,
       actionCount: 0,
       currentBet: 0,
@@ -240,6 +406,18 @@ function getOrCreateGame(gameId) {
 }
 
 function initializeGame(game) {
+  game.handNumber += 1;
+  if (game.handNumber === 1) {
+    game.dealerIndex = 0;
+  } else {
+    game.dealerIndex = nextActiveIndex(game.players, game.dealerIndex);
+  }
+  game.pot = 0;
+  game.winner = null;
+  game.players.forEach((player) => {
+    player.folded = false;
+    player.lastAction = null;
+  });
   const deck = shuffleDeck(buildDeck());
   const deckCommitment = poseidonHashMock(deck.join(","));
   const hands = new Map();
@@ -265,9 +443,24 @@ function initializeGame(game) {
   game.encryptedHands = encryptedHands;
   game.phase = "preflop";
   game.actionCount = 0;
-  game.currentBet = 0;
+  game.currentBet = game.bigBlind;
   game.roundBets = new Map();
-  game.pendingActors = game.players.map((player) => player.hash);
+  const sbIndex = nextActiveIndex(game.players, game.dealerIndex);
+  const bbIndex = nextActiveIndex(game.players, sbIndex);
+  const sbPlayer = game.players[sbIndex];
+  const bbPlayer = game.players[bbIndex];
+  if (sbPlayer) {
+    game.pot += game.smallBlind;
+    game.roundBets.set(sbPlayer.hash, game.smallBlind);
+    sbPlayer.lastAction = `blind ${game.smallBlind}`;
+  }
+  if (bbPlayer) {
+    game.pot += game.bigBlind;
+    game.roundBets.set(bbPlayer.hash, game.bigBlind);
+    bbPlayer.lastAction = `blind ${game.bigBlind}`;
+  }
+  const startIndex = nextActiveIndex(game.players, bbIndex);
+  setPendingActors(game, startIndex);
 }
 
 function ensureEncryptedHand(game, playerHash) {
@@ -347,35 +540,28 @@ function handleAction(game, playerHash, action, amount = 0) {
   if (playerIndex === -1) {
     return "player not in game";
   }
-  const pendingSet = new Set(game.pendingActors);
-  const isPending = pendingSet.has(playerHash);
-  const isTurn =
-    game.players[game.currentTurnIndex]?.hash === playerHash ||
-    !game.players[game.currentTurnIndex];
-  if (!isTurn && !isPending) {
+  const isTurn = game.players[game.currentTurnIndex]?.hash === playerHash;
+  if (!isTurn) {
     return "not your turn";
-  }
-  if (!isTurn && isPending) {
-    game.currentTurnIndex = playerIndex;
   }
 
   const parsedAmount = Number(amount);
   const safeAmount = Number.isFinite(parsedAmount) ? parsedAmount : 0;
   const player = game.players[playerIndex];
+  const prev = game.roundBets.get(playerHash) || 0;
+  const required = Math.max(game.currentBet - prev, 0);
 
   if (action === "fold") {
     player.folded = true;
     player.lastAction = "fold";
     removePending(game, playerHash);
   } else if (action === "check") {
-    if (game.currentBet > 0) {
+    if (required > 0) {
       return "cannot check";
     }
     player.lastAction = "check";
     removePending(game, playerHash);
   } else if (action === "call") {
-    const prev = game.roundBets.get(playerHash) || 0;
-    const required = Math.max(game.currentBet - prev, 0);
     if (safeAmount !== required) {
       return "call amount must match bet";
     }
@@ -391,7 +577,6 @@ function handleAction(game, playerHash, action, amount = 0) {
     if (safeAmount <= game.currentBet) {
       return "raise too small";
     }
-    const prev = game.roundBets.get(playerHash) || 0;
     const delta = safeAmount - prev;
     game.pot += delta;
     game.currentBet = safeAmount;
@@ -416,18 +601,21 @@ function handleAction(game, playerHash, action, amount = 0) {
   const activePlayers = game.players.filter((p) => !p.folded);
   if (activePlayers.length <= 1) {
     game.phase = "showdown";
+    game.revealedCount = 5;
     game.winner = activePlayers[0]?.hash || null;
   } else {
     game.currentTurnIndex = nextActiveIndex(game.players, game.currentTurnIndex);
     if (game.pendingActors.length === 0) {
       advancePhase(game);
       if (game.phase === "showdown") {
-        if (!game.winner) {
-          game.winner = activePlayers[0]?.hash || null;
-        }
+        game.revealedCount = 5;
+        const result = determineWinners(game);
+        game.winner = result.winners.length
+          ? result.winners.join(", ")
+          : activePlayers[0]?.hash || null;
       } else {
-        startRound(game);
-        game.currentTurnIndex = nextActiveIndex(game.players, -1);
+        const startIndex = nextActiveIndex(game.players, game.dealerIndex);
+        startRound(game, startIndex);
       }
     }
   }
@@ -460,13 +648,28 @@ function runBotTurns(game) {
   }
 }
 
-function startRound(game) {
-  const activeHashes = game.players
-    .filter((player) => !player.folded)
-    .map((player) => player.hash);
+function setPendingActors(game, startIndex) {
+  const activeHashes = [];
+  if (game.players.length) {
+    for (let i = 0; i < game.players.length; i += 1) {
+      const idx = (startIndex + i) % game.players.length;
+      const player = game.players[idx];
+      if (player && !player.folded) {
+        activeHashes.push(player.hash);
+      }
+    }
+  }
   game.pendingActors = activeHashes;
+  game.currentTurnIndex =
+    activeHashes.length > 0
+      ? game.players.findIndex((p) => p.hash === activeHashes[0])
+      : game.currentTurnIndex;
+}
+
+function startRound(game, startIndex) {
   game.currentBet = 0;
   game.roundBets = new Map();
+  setPendingActors(game, startIndex);
 }
 
 function removePending(game, playerHash) {
@@ -499,6 +702,10 @@ app.post("/api/game/join", (req, res) => {
   }
   const existing = game.players.find((player) => player.hash === playerHash);
   if (!existing) {
+    if (game.phase !== "waiting") {
+      res.status(409).json({ error: "game already started" });
+      return;
+    }
     game.players.push({
       hash: playerHash,
       folded: false,

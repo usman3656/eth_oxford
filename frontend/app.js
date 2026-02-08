@@ -19,7 +19,6 @@ const removeBotBtn = document.getElementById("removeBotBtn");
 const verifyFaceBtn = document.getElementById("verifyFaceBtn");
 const dealBtn = document.getElementById("dealBtn");
 const verifyHandBtn = document.getElementById("verifyHandBtn");
-const revealBtn = document.getElementById("revealBtn");
 const foldBtn = document.getElementById("foldBtn");
 const checkBtn = document.getElementById("checkBtn");
 const callBtn = document.getElementById("callBtn");
@@ -48,7 +47,8 @@ const state = {
   lockedFaceDescriptor: null,
   lockedDescriptorSamples: [],
   faceMismatchCount: 0,
-  lastBotActionSig: null
+  lastBotActionSig: null,
+  forceFaceRelock: false
 };
 
 sessionStore.setItem("zkpoker.playerKey", state.playerKey);
@@ -93,6 +93,7 @@ async function initWebcam() {
     });
     webcam.srcObject = stream;
     state.stream = stream;
+    stopStreamBtn.textContent = "Close Stream";
     streamStatus.textContent = "Stream: live";
     streamStatus.classList.remove("muted", "bad", "warn");
     stream.getVideoTracks().forEach((track) => {
@@ -120,6 +121,7 @@ function stopWebcam() {
     state.stream = null;
   }
   webcam.srcObject = null;
+  stopStreamBtn.textContent = "Open Stream";
   const snapCtx = snapshot.getContext("2d");
   snapCtx.clearRect(0, 0, snapshot.width, snapshot.height);
   streamStatus.textContent = "Stream: offline";
@@ -315,20 +317,38 @@ function decodeBase64Url(value) {
   return atob(padded);
 }
 
-function revealCards(encryptedHand) {
+function formatCard(card) {
+  if (!card) {
+    return "??";
+  }
+  const trimmed = String(card).trim();
+  if (!trimmed) {
+    return "??";
+  }
+  const suit = trimmed.slice(-1);
+  const rank = trimmed.slice(0, -1);
+  const suitMap = { S: "♠", H: "♥", D: "♦", C: "♣" };
+  if (suitMap[suit]) {
+    return `${rank}${suitMap[suit]}`;
+  }
+  return trimmed;
+}
+
+function getDecodedHand(encryptedHand) {
+  if (!encryptedHand || !Array.isArray(encryptedHand.cards)) {
+    return null;
+  }
   const cards = encryptedHand.cards.map((enc) => {
     const decoded = decodeBase64Url(enc);
-    return decoded.split("|")[0];
+    return formatCard(decoded.split("|")[0]);
   });
-  const cardEls = document.querySelectorAll(".hole-cards .card");
-  cardEls[0].textContent = cards[0] || "??";
-  cardEls[1].textContent = cards[1] || "??";
+  return cards.length ? cards : null;
 }
 
 function renderCommunityCards(cards) {
   const cardEls = document.querySelectorAll(".community-cards .card");
   cardEls.forEach((el, idx) => {
-    el.textContent = cards[idx] || "??";
+    el.textContent = formatCard(cards[idx]);
   });
 }
 
@@ -417,7 +437,7 @@ function updateGameUI() {
   logBotAction(game);
 
   if (game.phase === "showdown" && state.encryptedHand) {
-    revealCards(state.encryptedHand);
+    updateSeats(game.players || [], game.currentTurnIndex, game.winner);
   }
 }
 
@@ -499,15 +519,19 @@ function updateSeats(players, turnIndex, winnerHash) {
     el.textContent = player ? `$${player.stack ?? 100}` : "$0";
   });
 
+  const myCards = getDecodedHand(state.encryptedHand);
   cardMap.forEach((el, idx) => {
     if (!el) {
       return;
     }
     const player = players[idx];
-    const cards = state.game?.revealedHands?.[player?.hash] || null;
+    const cards =
+      player?.hash === state.playerHash && myCards
+        ? myCards
+        : state.game?.revealedHands?.[player?.hash] || null;
     const cardEls = el.querySelectorAll(".card");
     cardEls.forEach((cardEl, cardIdx) => {
-      cardEl.textContent = cards ? cards[cardIdx] || "??" : "??";
+      cardEl.textContent = cards ? formatCard(cards[cardIdx]) : "??";
     });
   });
 }
@@ -608,7 +632,7 @@ async function dealHands() {
     state.encryptedHand = result.encryptedHand;
     state.handProof = result.proof;
     logProof("Deal proof", result.proof);
-    revealCards(state.encryptedHand);
+    updateGameUI();
     return;
   }
   logProof("Deal error", { error: "Hand not ready yet." });
@@ -675,19 +699,12 @@ async function settleHand() {
 }
 
 
-verifyFaceBtn.addEventListener("click", verifyHuman);
+verifyFaceBtn.addEventListener("click", async () => {
+  state.forceFaceRelock = true;
+  await verifyHuman();
+});
 dealBtn.addEventListener("click", dealHands);
 verifyHandBtn.addEventListener("click", verifyHand);
-revealBtn.addEventListener("click", async () => {
-  if (!state.encryptedHand) {
-    await dealHands();
-  }
-  if (state.encryptedHand) {
-    revealCards(state.encryptedHand);
-  } else {
-    logProof("Reveal error", { error: "Hand not available yet." });
-  }
-});
 
 foldBtn.addEventListener("click", () => placeBet(0));
 checkBtn.addEventListener("click", async () => {
@@ -801,7 +818,13 @@ async function simulateGame() {
   }
   logProof("Simulate warning", { error: "Simulation exceeded steps." });
 }
-stopStreamBtn.addEventListener("click", stopWebcam);
+stopStreamBtn.addEventListener("click", () => {
+  if (state.stream) {
+    stopWebcam();
+    return;
+  }
+  initWebcam();
+});
 
 function startLiveness() {
   if (state.livenessTimer) {
@@ -847,6 +870,13 @@ async function ensureFaceLock() {
   if (!state.stream) {
     return false;
   }
+  if (state.forceFaceRelock) {
+    state.lockedFaceDescriptor = null;
+    state.lockedDescriptorSamples = [];
+    state.faceMismatchCount = 0;
+    sessionStore.removeItem("zkpoker.lockedFaceDescriptor");
+    state.forceFaceRelock = false;
+  }
   const detections = await detectFaceDetections();
   if (detections.length === 0) {
     return false;
@@ -872,9 +902,11 @@ async function ensureFaceLock() {
     descriptorDistance(state.lockedFaceDescriptor, liveDescriptor),
     minDescriptorDistance(state.lockedDescriptorSamples, liveDescriptor)
   );
-  if (descriptorDist > 0.6) {
-    return false;
+  if (descriptorDist > 0.75) {
+    state.faceMismatchCount += 1;
+    return state.faceMismatchCount < 5;
   }
+  state.faceMismatchCount = 0;
   addLockedDescriptorSample(liveDescriptor);
   return true;
 }

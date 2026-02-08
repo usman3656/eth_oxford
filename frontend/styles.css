@@ -110,11 +110,95 @@ canvas {
 }
 
 .panel-block.presence .media-row {
-  gap: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .panel-block.presence .meta-row {
   font-size: 11px;
+}
+
+.panel-block.presence .media-main {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.panel-block.presence video {
+  width: 280px;
+  height: 190px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: #020617;
+  box-shadow: 0 18px 28px rgba(15, 23, 42, 0.45);
+  object-fit: cover;
+}
+
+.panel-block.presence .thumbnail {
+  position: relative;
+  width: 140px;
+  height: 100px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(2, 6, 23, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.12),
+    0 12px 20px rgba(15, 23, 42, 0.35);
+}
+
+.panel-block.presence .thumbnail canvas {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  border: none;
+  object-fit: cover;
+}
+
+.panel-block.presence .thumb-label {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.7);
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.streams-grid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.stream-tile {
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(8, 12, 24, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 14px 22px rgba(15, 23, 42, 0.35);
+  display: grid;
+  gap: 8px;
+}
+
+.stream-label {
+  font-size: 0.78rem;
+  color: rgba(226, 232, 240, 0.75);
+}
+
+.stream-placeholder {
+  height: 80px;
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.7);
+  border: 1px dashed rgba(148, 163, 184, 0.2);
+  display: grid;
+  place-items: center;
+  color: rgba(226, 232, 240, 0.45);
+  font-size: 0.72rem;
 }
 
 .pill {
@@ -190,6 +274,8 @@ canvas {
 }
 
 .table-center {
+  position: relative;
+  z-index: 3;
   display: grid;
   gap: 12px;
   justify-items: center;
@@ -222,6 +308,7 @@ canvas {
 
 .seat {
   position: absolute;
+  z-index: 2;
   display: grid;
   gap: 6px;
   justify-items: center;
@@ -229,7 +316,9 @@ canvas {
 }
 
 .seat-top {
-  top: -12px;
+  top: -28px;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .seat-left {
@@ -245,7 +334,9 @@ canvas {
 }
 
 .seat-bottom {
-  bottom: -18px;
+  bottom: -42px;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .avatar {
@@ -495,6 +586,15 @@ canvas {
   canvas {
     width: 100%;
     height: auto;
+  }
+
+  .panel-block.presence .media-main {
+    justify-content: center;
+  }
+
+  .panel-block.presence .thumbnail {
+    width: 120px;
+    height: 86px;
   }
 
   .actions {

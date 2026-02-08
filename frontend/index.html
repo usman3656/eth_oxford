@@ -23,8 +23,13 @@
         <div class="panel-block presence full">
           <h2>Live Presence</h2>
           <div class="media-row">
-            <video id="webcam" autoplay playsinline muted></video>
-            <canvas id="snapshot" width="220" height="160"></canvas>
+            <div class="media-main">
+              <video id="webcam" autoplay playsinline muted></video>
+              <div class="thumbnail">
+                <canvas id="snapshot" width="140" height="100"></canvas>
+                <span class="thumb-label">Verified</span>
+              </div>
+            </div>
             <canvas id="processing" width="220" height="160" class="hidden"></canvas>
           </div>
           <div class="meta-row">
@@ -32,6 +37,21 @@
           </div>
           <div class="action-group">
             <button id="stopStreamBtn" class="ghost">Close Stream</button>
+            <button id="verifyFaceBtn">Verify Human</button>
+          </div>
+          <div class="streams-grid">
+            <div class="stream-tile">
+              <div class="stream-label">Opponent A</div>
+              <div class="stream-placeholder">No stream</div>
+            </div>
+            <div class="stream-tile">
+              <div class="stream-label">Opponent B</div>
+              <div class="stream-placeholder">No stream</div>
+            </div>
+            <div class="stream-tile">
+              <div class="stream-label">Opponent C</div>
+              <div class="stream-placeholder">No stream</div>
+            </div>
           </div>
         </div>
       </section>
@@ -104,10 +124,8 @@
 
       <section class="actions">
         <div class="action-group">
-          <button id="verifyFaceBtn">Verify Human</button>
           <button id="dealBtn">Deal</button>
           <button id="verifyHandBtn">Verify</button>
-          <button id="revealBtn">Reveal</button>
         </div>
         <div class="action-group">
           <button id="foldBtn" class="ghost">Fold</button>
